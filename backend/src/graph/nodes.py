@@ -129,9 +129,7 @@ def _build_impressive_final_report(audit_data: Dict[str, Any]) -> str:
 
 
 def _map_verdict_to_status(final_verdict: str) -> str:
-    """
-    Keeps backward compatibility with old PASS/FAIL flow.
-    """
+    """Maps audit verdict (e.g. LOW_RISK) to PASS/FAIL status for downstream consumers."""
     if final_verdict in ["LOW_RISK"]:
         return "PASS"
     return "FAIL"
@@ -247,7 +245,7 @@ def audit_content_node(state: VideoAuditState) -> Dict[str, Any]:
     docs = vector_store.similarity_search(query_text, k=3)
     retrieved_rules = "\n\n".join([doc.page_content for doc in docs])
 
-    # --- UPDATED PROMPT: FULL AUDIT REPORT, SAME WORKFLOW ---
+    # Audit report generation prompt (RAG + regulatory rules)
     system_prompt = f"""
     You are a Senior Broadcast Content Intelligence Auditor.
 
@@ -408,7 +406,7 @@ def audit_content_node(state: VideoAuditState) -> Dict[str, Any]:
             "flagged_segments_with_timestamps": audit_data.get("flagged_segments_with_timestamps", []),
             "recommendations": audit_data.get("recommendations", []),
 
-            # Backward-compatible fields
+            # Aggregated findings and status for API/consumers
             "compliance_results": audit_data.get("brand_safety_assessment", {}).get("findings", [])
                                   + audit_data.get("harmful_content_assessment", {}).get("findings", [])
                                   + audit_data.get("age_rating_assessment", {}).get("findings", []),

@@ -120,10 +120,6 @@ class VideoIndexerService:
         """
         Parses Azure Video Indexer JSON into our existing state format.
 
-        Minimal goal-aligned upgrade:
-        - Keep the same workflow and core fields
-        - Add a few extra insight fields that help the auditor create
-          a richer and more professional audit report
         """
         videos = vi_json.get("videos", [])
         summarized_insights = vi_json.get("summarizedInsights", {})
@@ -144,7 +140,7 @@ class VideoIndexerService:
                 if text:
                     ocr_lines.append(text)
 
-        # Minimal additional fields for richer audit reporting
+        # Labels, keywords, topics, brands, faces, named people, sentiments for audit
         labels = []
         for item in summarized_insights.get("labels", []):
             name = item.get("name")
@@ -188,14 +184,12 @@ class VideoIndexerService:
                 sentiments.append(sentiment_type)
 
         return {
-            # Existing fields kept the same
             "transcript": " ".join(transcript_lines),
             "ocr_text": ocr_lines,
             "video_metadata": {
                 "duration": summarized_insights.get("duration", {}).get("seconds"),
                 "platform": "youtube",
             },
-            # Minimal added fields for our richer audit goal
             "labels": labels,
             "keywords": keywords,
             "topics": topics,
