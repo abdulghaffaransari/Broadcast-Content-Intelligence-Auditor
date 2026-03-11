@@ -1,19 +1,23 @@
 """
 Azure Blob Storage integration for persisting Broadcast Content Intelligence audit reports.
-Reports are stored in a date-partitioned path: audit-reports/{YYYY/MM/DD}/{video_id}_report.txt
+Industry-standard date-partitioned paths:
+  - audit-reports/{YYYY/MM/DD}/{video_id}_report.txt   (human-readable report)
+  - audit-reports/{YYYY/MM/DD}/{video_id}_result.json  (full structured result for dashboard/APIs)
 """
 
+import json
 import logging
 import os
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from azure.storage.blob import BlobServiceClient, ContentSettings
 
 logger = logging.getLogger("brand-guardian")
 
 CONTAINER_NAME = "audit-reports"
-CONTENT_TYPE = "text/plain; charset=utf-8"
+CONTENT_TYPE_TXT = "text/plain; charset=utf-8"
+CONTENT_TYPE_JSON = "application/json; charset=utf-8"
 
 
 def save_report_to_blob(
@@ -57,11 +61,57 @@ def save_report_to_blob(
         blob_client.upload_blob(
             report_content.encode("utf-8"),
             overwrite=True,
-            content_settings=ContentSettings(content_type=CONTENT_TYPE),
+            content_settings=ContentSettings(content_type=CONTENT_TYPE_TXT),
         )
         url = blob_client.url
         logger.info("Saved audit report to Blob Storage: %s", blob_name)
         return url
     except Exception as e:
         logger.warning("Failed to save audit report to Blob Storage (%s): %s", blob_name, e)
+        return None
+
+
+def save_result_json_to_blob(
+    result_payload: Dict[str, Any],
+    video_id: str,
+    report_generated_at: Optional[datetime] = None,
+) -> Optional[str]:
+    """
+    Saves the full structured audit result as JSON to Azure Blob Storage.
+    Enables dashboard restore and API consumption without re-running the audit.
+
+    Path: audit-reports/{YYYY/MM/DD}/{video_id}_result.json
+    Uses the same date partition as the text report for consistency.
+    """
+    connection_string = os.getenv("AZURE_STORAGE_CONNECTION_STRING")
+    if not connection_string or not connection_string.strip():
+        logger.warning("AZURE_STORAGE_CONNECTION_STRING not set; skipping JSON result upload to Blob Storage.")
+        return None
+
+    if report_generated_at is None:
+        report_generated_at = datetime.now(timezone.utc)
+
+    date_partition = report_generated_at.strftime("%Y/%m/%d")
+    safe_video_id = (video_id or "unknown").replace("/", "_").strip() or "unknown"
+    blob_name = f"{date_partition}/{safe_video_id}_result.json"
+
+    try:
+        content = json.dumps(result_payload, indent=2, default=str)
+        client = BlobServiceClient.from_connection_string(connection_string)
+        container = client.get_container_client(CONTAINER_NAME)
+        if not container.exists():
+            container.create_container()
+            logger.info("Created Blob container: %s", CONTAINER_NAME)
+
+        blob_client = container.get_blob_client(blob_name)
+        blob_client.upload_blob(
+            content.encode("utf-8"),
+            overwrite=True,
+            content_settings=ContentSettings(content_type=CONTENT_TYPE_JSON),
+        )
+        url = blob_client.url
+        logger.info("Saved audit result JSON to Blob Storage: %s", blob_name)
+        return url
+    except Exception as e:
+        logger.warning("Failed to save audit result JSON to Blob Storage (%s): %s", blob_name, e)
         return None

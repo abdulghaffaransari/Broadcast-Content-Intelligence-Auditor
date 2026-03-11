@@ -12,7 +12,7 @@ from langchain_core.messages import SystemMessage, HumanMessage
 
 from backend.src.graph.state import VideoAuditState, ComplianceIssue
 from backend.src.services.video_indexer import VideoIndexerService
-from backend.src.services.report_storage import save_report_to_blob
+from backend.src.services.report_storage import save_report_to_blob, save_result_json_to_blob
 
 logger = logging.getLogger("brand-guardian")
 logging.basicConfig(level=logging.INFO)
@@ -465,8 +465,17 @@ def audit_content_node(state: VideoAuditState) -> Dict[str, Any]:
             report_generated_at=report_generated_at,
         )
 
-        return {
-            # New rich audit fields
+        compliance_results = (
+            audit_data.get("brand_safety_assessment", {}).get("findings", [])
+            + audit_data.get("harmful_content_assessment", {}).get("findings", [])
+            + audit_data.get("age_rating_assessment", {}).get("findings", [])
+        )
+        result_payload = {
+            "video_id": video_id,
+            "video_url": state.get("video_url") or "",
+            "report_generated_at": report_generated_at.isoformat(),
+            "final_status": final_status,
+            "final_report": detailed_final_report,
             "overall_risk_score": overall_risk_score,
             "final_verdict": final_verdict,
             "executive_summary": audit_data.get("executive_summary", ""),
@@ -477,13 +486,28 @@ def audit_content_node(state: VideoAuditState) -> Dict[str, Any]:
             "positive_findings": audit_data.get("positive_findings", []),
             "flagged_segments_with_timestamps": audit_data.get("flagged_segments_with_timestamps", []),
             "recommendations": audit_data.get("recommendations", []),
+            "compliance_results": compliance_results,
+        }
+        save_result_json_to_blob(
+            result_payload=result_payload,
+            video_id=video_id,
+            report_generated_at=report_generated_at,
+        )
 
-            # Aggregated findings and status for API/consumers
-            "compliance_results": audit_data.get("brand_safety_assessment", {}).get("findings", [])
-                                  + audit_data.get("harmful_content_assessment", {}).get("findings", [])
-                                  + audit_data.get("age_rating_assessment", {}).get("findings", []),
+        return {
+            "overall_risk_score": overall_risk_score,
+            "final_verdict": final_verdict,
+            "executive_summary": audit_data.get("executive_summary", ""),
+            "age_rating_assessment": audit_data.get("age_rating_assessment", {}),
+            "brand_safety_assessment": audit_data.get("brand_safety_assessment", {}),
+            "harmful_content_assessment": audit_data.get("harmful_content_assessment", {}),
+            "accessibility_and_distribution_assessment": audit_data.get("accessibility_and_distribution_assessment", {}),
+            "positive_findings": audit_data.get("positive_findings", []),
+            "flagged_segments_with_timestamps": audit_data.get("flagged_segments_with_timestamps", []),
+            "recommendations": audit_data.get("recommendations", []),
+            "compliance_results": compliance_results,
             "final_status": final_status,
-            "final_report": detailed_final_report
+            "final_report": detailed_final_report,
         }
 
     except Exception as e:
