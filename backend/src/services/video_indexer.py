@@ -116,6 +116,31 @@ class VideoIndexerService:
             logger.info(f"Status: {state}... waiting 30s")
             time.sleep(30)
 
+    def delete_video(self, video_id: str) -> None:
+        """
+        Deletes a processed video asset from Azure Video Indexer.
+
+        This is called AFTER we have extracted all required insights so that
+        raw media is not retained longer than necessary (cost/privacy).
+        """
+        try:
+            arm_token = self.get_access_token()
+            vi_token = self.get_account_token(arm_token)
+
+            url = f"https://api.videoindexer.ai/{self.location}/Accounts/{self.account_id}/Videos/{video_id}"
+            params = {"accessToken": vi_token}
+            response = requests.delete(url, params=params)
+
+            if response.status_code != 200:
+                logger.warning(
+                    f"Azure Video Indexer delete for {video_id} returned {response.status_code}: {response.text}"
+                )
+            else:
+                logger.info(f"Deleted Azure Video Indexer asset: {video_id}")
+        except Exception as e:
+            # Deletion failures should not break the main workflow
+            logger.warning(f"Failed to delete Azure Video Indexer asset {video_id}: {e}")
+
     def extract_data(self, vi_json):
         """
         Parses Azure Video Indexer JSON into our existing state format.

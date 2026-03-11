@@ -2,7 +2,8 @@ import json
 import os
 import logging
 import re
-from typing import Dict, Any, List
+from datetime import datetime, timezone
+from typing import Dict, Any, List, Optional
 
 from langchain_openai import AzureChatOpenAI, AzureOpenAIEmbeddings
 from langchain_community.vectorstores import AzureSearch
@@ -11,6 +12,7 @@ from langchain_core.messages import SystemMessage, HumanMessage
 
 from backend.src.graph.state import VideoAuditState, ComplianceIssue
 from backend.src.services.video_indexer import VideoIndexerService
+from backend.src.services.report_storage import save_report_to_blob
 
 logger = logging.getLogger("brand-guardian")
 logging.basicConfig(level=logging.INFO)
@@ -31,101 +33,148 @@ def _clean_llm_json(content: str) -> str:
     return content.strip()
 
 
-def _build_impressive_final_report(audit_data: Dict[str, Any]) -> str:
+# Report layout constants
+_REPORT_LINE_WIDTH = 70
+_SECTION_UNDERLINE = "-" * 60
+
+
+def _format_risk_band(verdict: str) -> str:
+    """Human-readable risk band description for the given verdict."""
+    bands = {
+        "LOW_RISK": "Low risk — Content suitable for general distribution with no material concerns.",
+        "LOW": "Low risk — Content suitable for general distribution with no material concerns.",
+        "MEDIUM_RISK": "Medium risk — Some concerns; review recommended before wide release.",
+        "MEDIUM": "Medium risk — Some concerns; review recommended before wide release.",
+        "HIGH_RISK": "High risk — Material issues identified; remediation or restrictions advised.",
+        "HIGH": "High risk — Material issues identified; remediation or restrictions advised.",
+    }
+    return bands.get(verdict, "Critical risk — Significant compliance or safety concerns; do not distribute without review.")
+
+
+def _format_assessment_section(section_data: Dict[str, Any]) -> str:
+    """Renders a single assessment block (score, summary, findings) for the report."""
+    score = section_data.get("score", "N/A")
+    summary = section_data.get("summary", "No summary available.")
+    findings = section_data.get("findings", [])
+
+    lines = [
+        _SECTION_UNDERLINE,
+        f"  Score: {score}",
+        f"  Summary: {summary}",
+        "",
+    ]
+    if findings:
+        lines.append("  Findings:")
+        for finding in findings:
+            severity = finding.get("severity", "N/A")
+            category = finding.get("category", "General")
+            description = finding.get("description", "No description.")
+            lines.append(f"    • [{severity}] {category}: {description}")
+            evidence = finding.get("evidence", "")
+            if evidence:
+                lines.append(f"      Evidence: {evidence}")
+    else:
+        lines.append("  Findings: None identified.")
+    return "\n".join(lines)
+
+
+def _build_professional_audit_report(
+    audit_data: Dict[str, Any],
+    video_id: Optional[str] = None,
+    report_generated_at: Optional[datetime] = None,
+) -> str:
     """
-    Converts structured JSON into a professional detailed audit report string.
+    Builds the final audit report from structured audit data.
+
+    Produces a formatted, industry-standard report with document metadata,
+    risk overview, and numbered assessment sections. Used for display and
+    persistence (e.g. Blob Storage).
     """
+    report_generated_at = report_generated_at or datetime.now(timezone.utc)
+    doc_id = video_id or "N/A"
+    generated_iso = report_generated_at.strftime("%Y-%m-%d %H:%M:%S UTC")
+
     executive_summary = audit_data.get("executive_summary", "No executive summary generated.")
     overall_risk_score = audit_data.get("overall_risk_score", 0)
     final_verdict = audit_data.get("final_verdict", "LOW_RISK")
+    risk_band = _format_risk_band(final_verdict)
 
     age_rating = audit_data.get("age_rating_assessment", {})
     brand_safety = audit_data.get("brand_safety_assessment", {})
     harmful_content = audit_data.get("harmful_content_assessment", {})
     accessibility = audit_data.get("accessibility_and_distribution_assessment", {})
-
     positive_findings = audit_data.get("positive_findings", [])
     flagged_segments = audit_data.get("flagged_segments_with_timestamps", [])
     recommendations = audit_data.get("recommendations", [])
 
-    def format_findings(section_name: str, section_data: Dict[str, Any]) -> str:
-        score = section_data.get("score", "N/A")
-        summary = section_data.get("summary", "No summary available.")
-        findings = section_data.get("findings", [])
+    sep = "=" * _REPORT_LINE_WIDTH
+    indent_summary = "  " + executive_summary.replace("\n", "\n  ")
 
-        lines = [
-            f"{section_name}:",
-            f"- Score: {score}",
-            f"- Summary: {summary}",
-        ]
-
-        if findings:
-            lines.append("- Findings:")
-            for finding in findings:
-                lines.append(
-                    f"  • [{finding.get('severity', 'N/A')}] {finding.get('category', 'General')}: "
-                    f"{finding.get('description', 'No description.')}"
-                )
-                evidence = finding.get("evidence", "")
-                if evidence:
-                    lines.append(f"    Evidence: {evidence}")
-        else:
-            lines.append("- Findings: None identified")
-
-        return "\n".join(lines)
-
-    report_parts = [
-        "BROADCAST CONTENT INTELLIGENCE AUDIT REPORT",
-        "=" * 50,
-        f"Overall Risk Score: {overall_risk_score}/100",
-        f"Final Verdict: {final_verdict}",
-        "",
-        "Executive Summary:",
-        executive_summary,
-        "",
-        format_findings("1. Age Rating Assessment", age_rating),
-        "",
-        format_findings("2. Brand Safety Assessment", brand_safety),
-        "",
-        format_findings("3. Harmful Content Assessment", harmful_content),
-        "",
-        format_findings("4. Accessibility and Distribution Assessment", accessibility),
-        "",
-        "5. Positive Findings:",
+    sections = [
+        (sep, "BROADCAST CONTENT INTELLIGENCE AUDIT REPORT", "Compliance & Safety Assessment", sep),
+        ("", f"  Document ID:        {doc_id}", f"  Report generated:   {generated_iso}", "  Classification:     Internal — Content Audit", ""),
+        (sep, "RISK OVERVIEW", sep),
+        ("", f"  Overall Risk Score:  {overall_risk_score}/100", f"  Final Verdict:       {final_verdict}", f"  Risk Band:           {risk_band}", ""),
+        (sep, "EXECUTIVE SUMMARY", sep),
+        ("", indent_summary, ""),
+        (sep, "1. AGE RATING ASSESSMENT", sep),
+        ("", _format_assessment_section(age_rating), ""),
+        (sep, "2. BRAND SAFETY ASSESSMENT", sep),
+        ("", _format_assessment_section(brand_safety), ""),
+        (sep, "3. HARMFUL CONTENT ASSESSMENT", sep),
+        ("", _format_assessment_section(harmful_content), ""),
+        (sep, "4. ACCESSIBILITY AND DISTRIBUTION ASSESSMENT", sep),
+        ("", _format_assessment_section(accessibility), ""),
+        (sep, "5. POSITIVE FINDINGS", sep),
     ]
 
+    report_lines = []
+    for block in sections:
+        for line in block:
+            if line == sep or (line and line.startswith("  ")):
+                report_lines.append(line)
+            elif line:
+                report_lines.append(f"  {line}")
+            else:
+                report_lines.append(line)
+
+    # Positive findings
     if positive_findings:
-        for item in positive_findings:
-            report_parts.append(f"- {item}")
+        report_lines.extend(f"  • {item}" for item in positive_findings)
     else:
-        report_parts.append("- No notable positive findings identified.")
+        report_lines.append("  No notable positive findings identified.")
 
-    report_parts.append("")
-    report_parts.append("6. Flagged Segments with Timestamps:")
-
+    report_lines.extend(["", sep, "  6. FLAGGED SEGMENTS (WITH TIMESTAMPS)", sep, ""])
     if flagged_segments:
         for seg in flagged_segments:
-            report_parts.append(
-                f"- [{seg.get('start_time', 'N/A')} - {seg.get('end_time', 'N/A')}] "
-                f"{seg.get('category', 'General')} ({seg.get('severity', 'N/A')}): "
-                f"{seg.get('evidence', 'No evidence.')}"
-            )
+            start_t = seg.get("start_time", "N/A")
+            end_t = seg.get("end_time", "N/A")
+            category = seg.get("category", "General")
+            severity = seg.get("severity", "N/A")
+            evidence = seg.get("evidence", "No evidence.")
+            report_lines.append(f"  • [{start_t} – {end_t}] {category} ({severity})")
+            report_lines.append(f"    Evidence: {evidence}")
             rationale = seg.get("rationale", "")
             if rationale:
-                report_parts.append(f"  Rationale: {rationale}")
+                report_lines.append(f"    Rationale: {rationale}")
     else:
-        report_parts.append("- No flagged segments identified.")
+        report_lines.append("  No flagged segments identified.")
 
-    report_parts.append("")
-    report_parts.append("7. Recommendations:")
-
+    report_lines.extend(["", sep, "  7. RECOMMENDATIONS", sep, ""])
     if recommendations:
-        for item in recommendations:
-            report_parts.append(f"- {item}")
+        report_lines.extend(f"  • {item}" for item in recommendations)
     else:
-        report_parts.append("- No specific recommendations generated.")
+        report_lines.append("  No specific recommendations generated.")
 
-    return "\n".join(report_parts)
+    report_lines.extend([
+        "",
+        sep,
+        "  — End of Report —",
+        f"  Generated by Broadcast Content Intelligence Auditor | {generated_iso}",
+        sep,
+    ])
+
+    return "\n".join(report_lines)
 
 
 def _map_verdict_to_status(final_verdict: str) -> str:
@@ -169,6 +218,12 @@ def index_video_node(state: VideoAuditState) -> Dict[str, Any]:
 
         # 5. EXTRACT
         clean_data = vi_service.extract_data(raw_insights)
+
+        # 6. RETENTION: DELETE REMOTE VIDEO ASSET (KEEP ONLY INSIGHTS)
+        try:
+            vi_service.delete_video(azure_video_id)
+        except Exception as delete_err:
+            logger.warning(f"Could not delete Azure Video Indexer asset {azure_video_id}: {delete_err}")
 
         logger.info("--- [Node: Indexer] Extraction Complete ---")
         return clean_data
@@ -395,7 +450,20 @@ def audit_content_node(state: VideoAuditState) -> Dict[str, Any]:
         final_verdict = audit_data.get("final_verdict", "LOW_RISK")
         final_status = _map_verdict_to_status(final_verdict)
 
-        detailed_final_report = _build_impressive_final_report(audit_data)
+        video_id = state.get("video_id") or "unknown"
+        report_generated_at = datetime.now(timezone.utc)
+        detailed_final_report = _build_professional_audit_report(
+            audit_data,
+            video_id=video_id,
+            report_generated_at=report_generated_at,
+        )
+
+        # Persist report to Azure Blob Storage: audit-reports/{date}/{video_id}_report.txt
+        save_report_to_blob(
+            report_content=detailed_final_report,
+            video_id=video_id,
+            report_generated_at=report_generated_at,
+        )
 
         return {
             # New rich audit fields
