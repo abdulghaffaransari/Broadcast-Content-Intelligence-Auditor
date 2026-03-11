@@ -2,9 +2,9 @@
 Main execution entry point for the Broadcast Content Intelligence Auditor.
 
 This module starts the end-to-end audit workflow:
-1. Prepares the video audit request
-2. Runs the LangGraph workflow
-3. Displays the final structured audit report
+1. Prepares the video audit request (URL, video ID).
+2. Runs the LangGraph workflow (Indexer → Auditor).
+3. Displays the final structured audit report in the console.
 """
 
 import uuid
@@ -15,8 +15,10 @@ from dotenv import load_dotenv
 
 from backend.src.graph.workflow import app
 
+# Load environment variables from .env (Azure, OpenAI, Search, etc.)
 load_dotenv(override=True)
 
+# Configure logging for the CLI run
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -24,9 +26,15 @@ logging.basicConfig(
 logger = logging.getLogger("broadcast-audit-runner")
 
 
+# -----------------------------------------------------------------------------
+# Report formatting helpers: turn workflow state into readable console output
+# -----------------------------------------------------------------------------
+
+
 def _print_section_assessment(title: str, section_data: dict) -> None:
     """
-    Prints a single assessment section in a professional readable format.
+    Prints one assessment block (e.g. Age Rating, Brand Safety) with score,
+    summary, and a list of findings (severity, category, description, evidence).
     """
     if not section_data:
         print(f"\n{title}")
@@ -55,7 +63,8 @@ def _print_section_assessment(title: str, section_data: dict) -> None:
 
 def _print_list_section(title: str, items: list, empty_message: str) -> None:
     """
-    Prints a simple bullet list section.
+    Prints a section that is just a list of items (e.g. Positive Findings,
+    Recommendations). Shows empty_message when the list is empty.
     """
     print(f"\n{title}")
     if items:
@@ -67,7 +76,8 @@ def _print_list_section(title: str, items: list, empty_message: str) -> None:
 
 def _print_flagged_segments(flagged_segments: list) -> None:
     """
-    Prints flagged segments with timestamps.
+    Prints each flagged segment with start/end time, category, severity,
+    evidence, and rationale so users can locate issues in the video.
     """
     print("\nFlagged Segments with Timestamps")
     if not flagged_segments:
@@ -89,56 +99,18 @@ def _print_flagged_segments(flagged_segments: list) -> None:
 
 def _print_final_report(final_state: dict) -> None:
     """
-    Prints the full professional audit output.
+    Prints only the final, fully formatted audit report string produced by the
+    Auditor node, plus any errors captured in state. This avoids duplicating
+    a partial header with N/A fields and treats the LLM report as the single
+    source of truth for human readers.
     """
-    print("\n=== BROADCAST CONTENT INTELLIGENCE AUDIT REPORT ===")
-
-    print(f"Video ID:            {final_state.get('video_id', 'N/A')}")
-    print(f"Final Status:        {final_state.get('final_status', 'N/A')}")
-    print(f"Overall Risk Score:  {final_state.get('overall_risk_score', 'N/A')}/100")
-    print(f"Final Verdict:       {final_state.get('final_verdict', 'N/A')}")
-
-    executive_summary = final_state.get("executive_summary")
-    if executive_summary:
-        print("\nExecutive Summary")
-        print(executive_summary)
-
-    _print_section_assessment(
-        "Age Rating Assessment",
-        final_state.get("age_rating_assessment", {})
-    )
-    _print_section_assessment(
-        "Brand Safety Assessment",
-        final_state.get("brand_safety_assessment", {})
-    )
-    _print_section_assessment(
-        "Harmful Content Assessment",
-        final_state.get("harmful_content_assessment", {})
-    )
-    _print_section_assessment(
-        "Accessibility and Distribution Assessment",
-        final_state.get("accessibility_and_distribution_assessment", {})
-    )
-
-    _print_list_section(
-        "Positive Findings",
-        final_state.get("positive_findings", []),
-        "No notable positive findings identified."
-    )
-
-    _print_flagged_segments(final_state.get("flagged_segments_with_timestamps", []))
-
-    _print_list_section(
-        "Recommendations",
-        final_state.get("recommendations", []),
-        "No specific recommendations generated."
-    )
-
     final_report = final_state.get("final_report")
     if final_report:
-        print("\nFull Report Summary")
-        print(final_report)
+        print("\n" + final_report)
+    else:
+        print("\nNo final report was generated.")
 
+    # Any workflow or API errors encountered
     errors = final_state.get("errors", [])
     if errors:
         print("\nErrors")
@@ -146,13 +118,22 @@ def _print_final_report(final_state: dict) -> None:
             print(f"- {error}")
 
 
+# -----------------------------------------------------------------------------
+# CLI entry: run the workflow and print the audit report
+# -----------------------------------------------------------------------------
+
+
 def run_cli_simulation():
     """
-    Simulates a broadcast content audit request.
+    Runs one full audit: builds initial state (video URL, video ID), invokes
+    the LangGraph workflow (Indexer then Auditor), and prints the final
+    report to the console.
     """
     session_id = str(uuid.uuid4())
     logger.info(f"Starting Audit Session: {session_id}")
 
+    # Required inputs for the workflow; compliance_results and errors are
+    # append-only lists populated by the graph nodes
     initial_inputs = {
         "video_url": "https://youtu.be/dT7S75eYhcQ",
         "video_id": f"vid_{session_id[:8]}",
@@ -164,6 +145,7 @@ def run_cli_simulation():
     print(json.dumps(initial_inputs, indent=2))
 
     try:
+        # Run the graph: index_video_node → audit_content_node
         final_state = app.invoke(initial_inputs)
 
         print("\n--- 2. Workflow Execution Complete ---")
