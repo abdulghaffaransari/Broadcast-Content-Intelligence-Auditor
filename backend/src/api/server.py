@@ -1,14 +1,12 @@
-import uuid        # Generate unique session IDs
-import logging     # Application logging
-from fastapi import FastAPI, HTTPException  
-# ↑ FastAPI = modern web framework (like Flask but faster)
-# ↑ HTTPException = handles errors with proper HTTP status codes
+import uuid
+import logging
+import threading
+from datetime import datetime, timezone
+from typing import List, Optional, Dict, Any
 
-from pydantic import BaseModel  
-# ↑ Pydantic = data validation library (ensures API requests have correct format)
-
-from typing import List, Optional  
-# ↑ Type hints for better code clarity and auto-completion
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
 
 # ========== STEP 1: LOAD ENVIRONMENT VARIABLES ==========
@@ -46,8 +44,8 @@ logger = logging.getLogger("api-server")
 # ========== STEP 5: CREATE FASTAPI APPLICATION ==========
 app = FastAPI(
     # Metadata for auto-generated API documentation (Swagger UI)
-    title="Brand Guardian AI API",
-    description="API for auditing video content against brand compliance rules.",
+    title="Broadcast Content Intelligence Auditor API",
+    description="API for generating professional broadcast content intelligence audit reports.",
     version="1.0.0"
 )
 # FastAPI automatically creates:
@@ -94,124 +92,216 @@ class ComplianceIssue(BaseModel):
 # --- RESPONSE MODEL ---
 class AuditResponse(BaseModel):
     """
-    Defines the structure of API responses.
-    
-    FastAPI uses this to:
-    1. Validate the response before sending (catches bugs)
-    2. Auto-generate API documentation (shows users what to expect)
-    3. Provide type hints for frontend developers
-    
-    Example response:
-    {
-        "session_id": "ce6c43bb-c71a-4f16-a377-8b493502fee2",
-        "video_id": "vid_ce6c43bb",
-        "status": "FAIL",
-        "final_report": "Video contains 2 critical violations...",
-        "compliance_results": [
-            {
-                "category": "Misleading Claims",
-                "severity": "CRITICAL",
-                "description": "Absolute guarantee at 00:32"
-            }
-        ]
-    }
+    Full audit result: session id, video id, status, text report, and structured fields.
+    Returned by sync POST /audit and by GET /audit/jobs/{job_id}/result when the job is completed.
     """
-    session_id: str                           # Unique audit session ID
-    video_id: str                             # Shortened video identifier
-    status: str                               # PASS or FAIL
-    final_report: str                         # AI-generated summary
-    compliance_results: List[ComplianceIssue] # List of violations (can be empty)
+    session_id: str
+    video_id: str
+    status: str
+    final_report: str
+    compliance_results: List[ComplianceIssue]
+    # Optional structured fields for APIs/clients (aligned with VideoAuditState)
+    overall_risk_score: Optional[int] = None
+    final_verdict: Optional[str] = None
+    executive_summary: Optional[str] = None
+    age_rating_assessment: Optional[Dict[str, Any]] = None
+    brand_safety_assessment: Optional[Dict[str, Any]] = None
+    harmful_content_assessment: Optional[Dict[str, Any]] = None
+    accessibility_and_distribution_assessment: Optional[Dict[str, Any]] = None
+    positive_findings: Optional[List[str]] = None
+    flagged_segments_with_timestamps: Optional[List[Dict[str, Any]]] = None
+    recommendations: Optional[List[str]] = None
 
 
-# ========== STEP 7: DEFINE MAIN ENDPOINT ==========
-@app.post("/audit", response_model=AuditResponse)
-# ↑ @app.post = Decorator that registers this function as a POST endpoint
-# ↑ "/audit" = URL path (http://localhost:8000/audit)
-# ↑ response_model = Tells FastAPI to validate response matches AuditResponse
+# --- ASYNC JOB MODELS ---
+class JobCreated(BaseModel):
+    """Returned when an async audit job is started."""
+    job_id: str
+    status: str = "pending"
+    message: str = "Poll GET /audit/jobs/{job_id}/status for status; GET /audit/jobs/{job_id}/result for the report when completed."
 
-async def audit_video(request: AuditRequest):
-    """
-    Main API endpoint that triggers the compliance audit workflow.
-    
-    HTTP Method: POST
-    URL: http://localhost:8000/audit
-    
-    Request Body:
-    {
-        "video_url": "https://youtu.be/abc123"
-    }
-    
-    Response: AuditResponse object (defined above)
-    
-    Process:
-    1. Generate unique session ID
-    2. Prepare input for LangGraph workflow
-    3. Invoke the graph (Indexer → Auditor)
-    4. Return formatted results
-    """
-    
-    # ========== GENERATE SESSION ID ==========
-    session_id = str(uuid.uuid4())  
-    # Creates unique ID like: "ce6c43bb-c71a-4f16-a377-8b493502fee2"
-    
-    video_id_short = f"vid_{session_id[:8]}"  
-    # Takes first 8 characters: "vid_ce6c43bb"
-    # Easier to reference in logs/UI than full UUID
-    
-    # ========== LOG INCOMING REQUEST ==========
-    logger.info(f"Received Audit Request: {request.video_url} (Session: {session_id})")
-    # Example output: "Received Audit Request: https://youtu.be/abc (Session: ce6c43bb...)"
 
-    # ========== PREPARE GRAPH INPUT ==========
-    initial_inputs = {
-        "video_url": request.video_url,  # From the API request
-        "video_id": video_id_short,      # Generated ID
-        "compliance_results": [],        # Will be populated by Auditor
-        "errors": []                     # Tracks any processing errors
-    }
+class JobStatus(BaseModel):
+    """Job status for polling."""
+    job_id: str
+    status: str  # pending | running | completed | failed
+    created_at: str
+    updated_at: Optional[str] = None
+    error: Optional[str] = None
+
+
+# --- IN-MEMORY JOB STORE (for async audits) ---
+_job_store: Dict[str, Dict[str, Any]] = {}
+_job_lock = threading.Lock()
+
+
+def _run_audit_job(job_id: str, video_url: str, session_id: str, video_id_short: str) -> None:
+    """Runs the compliance graph in a background thread and updates the job store."""
+    with _job_lock:
+        if job_id not in _job_store:
+            return
+        _job_store[job_id]["status"] = "running"
+        _job_store[job_id]["updated_at"] = datetime.now(timezone.utc).isoformat()
 
     try:
-        # ========== INVOKE LANGGRAPH WORKFLOW ==========
-        # This is the SAME logic from main.py - just wrapped in an API
+        initial_inputs = {
+            "video_url": video_url,
+            "video_id": video_id_short,
+            "compliance_results": [],
+            "errors": [],
+        }
         final_state = compliance_graph.invoke(initial_inputs)
-        # ↑ Blocking call - waits for entire workflow to complete
-        # ↑ Flow: START → Indexer → Auditor → END
-        # ↑ Returns: Final state dictionary with all results
-        
-        # NOTE: In production, you'd use:
-        # await compliance_graph.ainvoke(initial_inputs)
-        # ↑ Async version - doesn't block the server while processing
-        
-        # ========== MAP GRAPH OUTPUT TO API RESPONSE ==========
-        return AuditResponse(
+
+        response = AuditResponse(
             session_id=session_id,
-            video_id=final_state.get("video_id"),  
-            # .get() safely retrieves value (None if missing)
-            
-            status=final_state.get("final_status", "UNKNOWN"),  
-            # Defaults to "UNKNOWN" if key doesn't exist
-            
+            video_id=final_state.get("video_id", video_id_short),
+            status=final_state.get("final_status", "UNKNOWN"),
             final_report=final_state.get("final_report", "No report generated."),
-            
-            compliance_results=final_state.get("compliance_results", [])
-            # Returns empty list [] if no violations
+            compliance_results=final_state.get("compliance_results", []),
+            overall_risk_score=final_state.get("overall_risk_score"),
+            final_verdict=final_state.get("final_verdict"),
+            executive_summary=final_state.get("executive_summary"),
+            age_rating_assessment=final_state.get("age_rating_assessment"),
+            brand_safety_assessment=final_state.get("brand_safety_assessment"),
+            harmful_content_assessment=final_state.get("harmful_content_assessment"),
+            accessibility_and_distribution_assessment=final_state.get("accessibility_and_distribution_assessment"),
+            positive_findings=final_state.get("positive_findings"),
+            flagged_segments_with_timestamps=final_state.get("flagged_segments_with_timestamps"),
+            recommendations=final_state.get("recommendations"),
         )
-        # FastAPI automatically converts this Pydantic object to JSON
+
+        with _job_lock:
+            if job_id in _job_store:
+                _job_store[job_id]["status"] = "completed"
+                _job_store[job_id]["updated_at"] = datetime.now(timezone.utc).isoformat()
+                _job_store[job_id]["result"] = response.model_dump()
 
     except Exception as e:
-        # ========== ERROR HANDLING ==========
-        logger.error(f"Audit Failed: {str(e)}")  
-        # Log the error for debugging
-        
-        raise HTTPException(
-            status_code=500,  # 500 = Internal Server Error
-            detail=f"Workflow Execution Failed: {str(e)}"
-            # Returns this error message to the client
+        logger.exception("Audit job %s failed", job_id)
+        with _job_lock:
+            if job_id in _job_store:
+                _job_store[job_id]["status"] = "failed"
+                _job_store[job_id]["updated_at"] = datetime.now(timezone.utc).isoformat()
+                _job_store[job_id]["error"] = str(e)
+
+
+# ========== STEP 7: AUDIT ENDPOINTS ==========
+
+def _state_to_audit_response(session_id: str, video_id_short: str, final_state: Dict[str, Any]) -> AuditResponse:
+    """Build AuditResponse from graph final state (sync and async result)."""
+    return AuditResponse(
+        session_id=session_id,
+        video_id=final_state.get("video_id", video_id_short),
+        status=final_state.get("final_status", "UNKNOWN"),
+        final_report=final_state.get("final_report", "No report generated."),
+        compliance_results=final_state.get("compliance_results", []),
+        overall_risk_score=final_state.get("overall_risk_score"),
+        final_verdict=final_state.get("final_verdict"),
+        executive_summary=final_state.get("executive_summary"),
+        age_rating_assessment=final_state.get("age_rating_assessment"),
+        brand_safety_assessment=final_state.get("brand_safety_assessment"),
+        harmful_content_assessment=final_state.get("harmful_content_assessment"),
+        accessibility_and_distribution_assessment=final_state.get("accessibility_and_distribution_assessment"),
+        positive_findings=final_state.get("positive_findings"),
+        flagged_segments_with_timestamps=final_state.get("flagged_segments_with_timestamps"),
+        recommendations=final_state.get("recommendations"),
+    )
+
+
+@app.post("/audit")
+async def audit_video(
+    request: AuditRequest,
+    async_mode: bool = Query(False, description="If true, start a background job and return job_id; poll status/result endpoints."),
+):
+    """
+    Run a compliance audit for the given video URL.
+
+    - **Sync (default):** Waits for the full workflow and returns the audit result (may timeout on long videos).
+    - **Async:** Set `?async_mode=true` to get a job_id immediately; poll GET /audit/jobs/{job_id}/status and GET /audit/jobs/{job_id}/result.
+    """
+    session_id = str(uuid.uuid4())
+    video_id_short = f"vid_{session_id[:8]}"
+
+    logger.info("Received audit request: %s (session: %s, async: %s)", request.video_url, session_id, async_mode)
+
+    if async_mode:
+        job_id = str(uuid.uuid4())
+        now = datetime.now(timezone.utc).isoformat()
+        with _job_lock:
+            _job_store[job_id] = {
+                "job_id": job_id,
+                "status": "pending",
+                "created_at": now,
+                "updated_at": None,
+                "result": None,
+                "error": None,
+            }
+        thread = threading.Thread(
+            target=_run_audit_job,
+            args=(job_id, request.video_url, session_id, video_id_short),
+            daemon=True,
         )
-        # Example error response:
-        # {
-        #     "detail": "Workflow Execution Failed: YouTube download error"
-        # }
+        thread.start()
+        return JSONResponse(
+            status_code=202,
+            content={
+                "job_id": job_id,
+                "status": "pending",
+                "message": "Poll GET /audit/jobs/{job_id}/status for status; GET /audit/jobs/{job_id}/result for the report when completed.",
+            },
+        )
+
+    initial_inputs = {
+        "video_url": request.video_url,
+        "video_id": video_id_short,
+        "compliance_results": [],
+        "errors": [],
+    }
+    try:
+        final_state = compliance_graph.invoke(initial_inputs)
+        return _state_to_audit_response(session_id, video_id_short, final_state)
+    except Exception as e:
+        logger.exception("Audit failed")
+        raise HTTPException(status_code=500, detail=f"Workflow execution failed: {str(e)}")
+
+
+@app.get("/audit/jobs/{job_id}/status", response_model=JobStatus)
+def get_job_status(job_id: str):
+    """Return the current status of an async audit job (pending, running, completed, failed)."""
+    with _job_lock:
+        job = _job_store.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return JobStatus(
+        job_id=job["job_id"],
+        status=job["status"],
+        created_at=job["created_at"],
+        updated_at=job.get("updated_at"),
+        error=job.get("error"),
+    )
+
+
+@app.get("/audit/jobs/{job_id}/result")
+def get_job_result(job_id: str):
+    """
+    Return the audit result when the job is completed.
+    Returns 202 with status if the job is still pending or running.
+    """
+    with _job_lock:
+        job = _job_store.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job["status"] == "completed":
+        return job["result"]
+    if job["status"] == "failed":
+        raise HTTPException(
+            status_code=422,
+            detail={"job_id": job_id, "status": "failed", "error": job.get("error", "Unknown error")},
+        )
+    return JSONResponse(
+        status_code=202,
+        content={"job_id": job_id, "status": job["status"], "message": "Job not yet completed. Poll again later."},
+    )
 
 
 # ========== STEP 8: HEALTH CHECK ENDPOINT ==========
@@ -235,7 +325,7 @@ def health_check():
         "service": "Brand Guardian AI"
     }
     """
-    return {"status": "healthy", "service": "Brand Guardian AI"}
+    return {"status": "healthy", "service": "Broadcast Content Intelligence Auditor API"}
     # FastAPI automatically converts dict to JSON response
 
 

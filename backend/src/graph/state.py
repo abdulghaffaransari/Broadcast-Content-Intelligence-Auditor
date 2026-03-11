@@ -40,8 +40,18 @@ class VideoAuditState(TypedDict):
     
     # --- Final Deliverables ---
     final_status: str               # "PASS" | "FAIL"
-    final_report: str               # Markdown summary for the frontend
-    
+    final_report: str               # Full text report for display/storage
+    overall_risk_score: Optional[int]           # 0–100 risk score
+    final_verdict: Optional[str]                # e.g. LOW_RISK, MEDIUM_RISK
+    executive_summary: Optional[str]             # Short summary for APIs/clients
+    age_rating_assessment: Optional[Dict[str, Any]]
+    brand_safety_assessment: Optional[Dict[str, Any]]
+    harmful_content_assessment: Optional[Dict[str, Any]]
+    accessibility_and_distribution_assessment: Optional[Dict[str, Any]]
+    positive_findings: Optional[List[str]]
+    flagged_segments_with_timestamps: Optional[List[Dict[str, Any]]]
+    recommendations: Optional[List[str]]
+
     # --- System Observability ---
     # Appends system-level errors (e.g., API timeouts) without halting execution logic.
     errors: Annotated[List[str], operator.add]
