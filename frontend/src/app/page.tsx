@@ -200,6 +200,17 @@ export default function DashboardPage() {
               <SectionCard title="Harmful content assessment" data={result?.harmful_content_assessment} />
               <SectionCard title="Accessibility & distribution" data={result?.accessibility_and_distribution_assessment} />
             </div>
+
+            {result?.final_report && (
+              <div className="rounded-lg bg-slate-800/50 border border-slate-600 flex flex-col min-h-0">
+                <p className="text-xs font-medium text-slate-400 uppercase tracking-wider px-4 pt-4 pb-2 shrink-0">Final audit report</p>
+                <div className="flex-1 min-h-0 px-4 pb-4">
+                  <pre className="h-[280px] text-sm text-slate-300 whitespace-pre-wrap font-sans overflow-y-auto overflow-x-hidden rounded border border-slate-600 bg-slate-900/80 p-3">
+                    {result.final_report}
+                  </pre>
+                </div>
+              </div>
+            )}
           </div>
           <div className="space-y-6">
             <EvidencePanel executiveSummary={result?.executive_summary} complianceResults={result?.compliance_results} />
@@ -208,15 +219,6 @@ export default function DashboardPage() {
             <ExportDropdown result={result} disabled={!result} />
           </div>
         </div>
-
-        {result?.final_report && (
-          <div className="rounded-lg bg-slate-800 border border-slate-700 p-4">
-            <p className="text-xs font-medium text-slate-400 uppercase tracking-wider mb-3">Final audit report</p>
-            <pre className="text-sm text-slate-300 whitespace-pre-wrap font-sans max-h-96 overflow-y-auto">
-              {result.final_report}
-            </pre>
-          </div>
-        )}
       </div>
     </>
   );
