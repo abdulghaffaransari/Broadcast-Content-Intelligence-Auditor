@@ -198,7 +198,14 @@ See `.env.example` or the repo for a full list. Never commit real `.env` (it’s
      - `POST /audit` – body: `{"video_url": "<youtube_url>"}` → JSON `AuditResponse` with `final_report`, `final_status`, and `compliance_results`.
      - Interactive docs at `http://localhost:8000/docs`.
 
-6. **Optional: one-time project layout**
+6. **Run the audit dashboard (frontend)**
+   - From the project root:
+     ```bash
+     cd frontend && npm install && npm run dev
+     ```
+   - Open [http://localhost:3000](http://localhost:3000) for the enterprise audit dashboard (video URL input, risk summary, sections, evidence, export as TXT/JSON/PDF, audit history). Ensure the API is running on port 8000.
+
+7. **Optional: one-time project layout**
    - `bash startup.sh` creates the expected directories and placeholder files if you start from an empty clone.
 
 ---

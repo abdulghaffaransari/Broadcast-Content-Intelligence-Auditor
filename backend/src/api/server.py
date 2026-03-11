@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import List, Optional, Dict, Any
 
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -43,10 +44,16 @@ logger = logging.getLogger("api-server")
 
 # ========== STEP 5: CREATE FASTAPI APPLICATION ==========
 app = FastAPI(
-    # Metadata for auto-generated API documentation (Swagger UI)
     title="Broadcast Content Intelligence Auditor API",
     description="API for generating professional broadcast content intelligence audit reports.",
-    version="1.0.0"
+    version="1.0.0",
+)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 # FastAPI automatically creates:
 # - Interactive docs at http://localhost:8000/docs
