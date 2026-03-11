@@ -157,7 +157,8 @@ Broadcast-Content-Intelligence-Auditor/
 Copy or create `.env` in the project root. Required (and commonly used) variables include:
 
 - **Azure Video Indexer:** `AZURE_VI_ACCOUNT_ID`, `AZURE_VI_LOCATION`, `AZURE_VI_NAME`, `AZURE_SUBSCRIPTION_ID`, `AZURE_RESOURCE_GROUP`
-- **Azure OpenAI:** `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_API_VERSION`, `AZURE_OPENAI_CHAT_DEPLOYMENT`, `AZURE_OPENAI_EMBEDDING_DEPLOYMENT`
+- **Azure OpenAI (chat):** `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_API_VERSION`, `AZURE_OPENAI_CHAT_DEPLOYMENT`, `AZURE_OPENAI_EMBEDDING_DEPLOYMENT`
+- **Azure OpenAI (embeddings, optional separate resource):** `AZURE_OPENAI_EMBEDDING_ENDPOINT`, `AZURE_OPENAI_EMBEDDING_API_VERSION`, `AZURE_OPENAI_EMBEDDING_DEPLOYMENT`, `AZURE_OPENAI_EMBEDDING_API_KEY`
 - **Azure AI Search:** `AZURE_SEARCH_ENDPOINT`, `AZURE_SEARCH_API_KEY`, `AZURE_SEARCH_INDEX_NAME`
 
 See `.env.example` or the repo for a full list. Never commit real `.env` (it’s in `.gitignore`).
@@ -180,10 +181,24 @@ See `.env.example` or the repo for a full list. Never commit real `.env` (it’s
      (or the equivalent from your environment).  
    - This fills the Azure AI Search index used by the Auditor.
 
-4. **Run the workflow**
-   - Use `main.py` or your API/CLI: pass `video_url` and `video_id`; the graph runs Indexer → Auditor and returns state containing `final_report` and all structured fields.
+4. **Run the workflow (CLI)**
+   - From the project root:
+     ```bash
+     uv run python main.py
+     ```
+   - The CLI prints a single, fully formatted **Broadcast Content Intelligence Audit Report** for the configured `video_url`.
 
-5. **Optional: one-time project layout**
+5. **Run as an API (FastAPI)**
+   - Start the API server with:
+     ```bash
+     uv run uvicorn backend.src.api.server:app --reload
+     ```
+   - Endpoints:
+     - `GET /health` – health check.
+     - `POST /audit` – body: `{"video_url": "<youtube_url>"}` → JSON `AuditResponse` with `final_report`, `final_status`, and `compliance_results`.
+     - Interactive docs at `http://localhost:8000/docs`.
+
+6. **Optional: one-time project layout**
    - `bash startup.sh` creates the expected directories and placeholder files if you start from an empty clone.
 
 ---
