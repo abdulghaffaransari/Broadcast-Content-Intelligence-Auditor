@@ -12,7 +12,7 @@ type UrlInputProps = {
 
 export function UrlInput({ onStart, disabled, defaultUrl }: UrlInputProps) {
   const [url, setUrl] = useState(defaultUrl ?? '');
-  const [asyncMode, setAsyncMode] = useState(false);
+  const [asyncMode, setAsyncMode] = useState(true);
 
   useEffect(() => {
     if (defaultUrl != null) setUrl(defaultUrl);
