@@ -1,85 +1,185 @@
 #!/usr/bin/env bash
-# Broadcast-Content-Intelligence-Auditor — create all directories and files from scratch.
-# Run from project root: bash startup.sh (or ./startup.sh on Unix after chmod +x)
+# Broadcast-Content-Intelligence-Auditor — idempotent project bootstrap.
+# Run from project root: bash startup.sh (or ./startup.sh after chmod +x).
 
-set -e
+set -euo pipefail
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-echo "Creating directories..."
-mkdir -p backend/data
-mkdir -p backend/scripts
-mkdir -p backend/src/api
-mkdir -p backend/src/graph
-mkdir -p backend/src/services
-mkdir -p backend/tests
-mkdir -p azure_functions
+echo ""
+echo "== Broadcast Content Intelligence Auditor: startup layout =="
 
-echo "Creating root files..."
+ensure_dir() {
+  local dir="$1"
+  if [ ! -d "$dir" ]; then
+    mkdir -p "$dir"
+    echo "[dir]   created  $dir"
+  else
+    echo "[dir]   exists   $dir"
+  fi
+}
 
-# .gitignore
-cat > .gitignore << 'GITIGNORE_EOF'
-.env
-GITIGNORE_EOF
+ensure_file() {
+  local path="$1"
+  local template_name="$2"  # only used for logging
 
-# .python-version
-cat > .python-version << 'PYVER_EOF'
-3.12
-PYVER_EOF
+  if [ ! -f "$path" ]; then
+    # Caller is responsible for redirecting a template into this path.
+    echo "[file]  created  $path ($template_name)"
+  else
+    echo "[file]  exists   $path"
+    return 1
+  fi
+}
 
-# .env (add your env vars here; keep in .gitignore for secrets)
-touch .env
+append_if_missing() {
+  local line="$1"
+  local file="$2"
 
-# README.md
-cat > README.md << 'README_EOF'
-# Broadcast-Content-Intelligence-Auditor
-README_EOF
+  if [ ! -f "$file" ]; then
+    echo "$line" > "$file"
+    echo "[file]  created  $file (added: $line)"
+    return
+  fi
 
-# pyproject.toml
-cat > pyproject.toml << 'PYPROJECT_EOF'
-[project]
-name = "broadcast-content-intelligence-auditor"
-version = "0.1.0"
-description = "Add your description here"
-readme = "README.md"
-requires-python = ">=3.12"
-dependencies = []
-PYPROJECT_EOF
+  if grep -qxF "$line" "$file"; then
+    echo "[file]  unchanged $file (already has: $line)"
+  else
+    echo "$line" >> "$file"
+    echo "[file]  updated  $file (added: $line)"
+  fi
+}
 
-# main.py
-cat > main.py << 'MAIN_EOF'
-def main():
-    print("Hello from broadcast-content-intelligence-auditor!")
+echo ""
+echo "-- Core directories --"
+ensure_dir "backend"
+ensure_dir "backend/data"
+ensure_dir "backend/scripts"
+ensure_dir "backend/src"
+ensure_dir "backend/src/api"
+ensure_dir "backend/src/graph"
+ensure_dir "backend/src/services"
+ensure_dir "backend/tests"
 
+ensure_dir "frontend"
+ensure_dir "frontend/src"
+ensure_dir "frontend/src/app"
+ensure_dir "frontend/src/components"
+ensure_dir "frontend/src/lib"
+ensure_dir "frontend/Images"
 
-if __name__ == "__main__":
-    main()
-MAIN_EOF
+ensure_dir "azure_functions"
 
-echo "Creating backend files..."
+echo ""
+echo "-- Root config & env --"
+
+# Ensure .env is present but never committed.
+append_if_missing ".env" ".gitignore"
+touch ".env"
+echo "[file]  touch    .env (secrets/config container)"
+
+echo ""
+echo "-- Backend placeholders (only if missing) --"
 
 # backend/scripts/index_documents.py
-touch backend/scripts/index_documents.py
+if ensure_file "backend/scripts/index_documents.py" "index_documents stub"; then
+  cat > "backend/scripts/index_documents.py" << 'PY_EOF'
+"""
+Entry point stub for indexing regulatory/policy documents into Azure AI Search.
 
-# backend/src/api
-touch backend/src/api/server.py
-touch backend/src/api/telemetry.py
+Replace this stub with your indexer implementation or run the existing one
+if this file already contains code.
+"""
 
-# backend/src/graph
-touch backend/src/graph/__init__.py
-touch backend/src/graph/nodes.py
-touch backend/src/graph/state.py
-touch backend/src/graph/workflow.py
+if __name__ == "__main__":
+    raise SystemExit("Implement document indexing logic in backend/scripts/index_documents.py")
+PY_EOF
+fi
 
-# backend/src/services
-touch backend/src/services/__init__.py
-touch backend/src/services/video_indexer.py
+# backend/src/api/server.py – do NOT overwrite if it already exists
+if [ ! -f "backend/src/api/server.py" ]; then
+  cat > "backend/src/api/server.py" << 'PY_EOF'
+"""
+FastAPI entrypoint stub for the Broadcast Content Intelligence Auditor API.
 
-# azure_functions
-touch azure_functions/function_app.py
+The real implementation lives in backend/src/api/server.py in this repository.
+This stub is only used when bootstrapping from scratch.
+"""
 
-# Keep empty dirs tracked
-touch backend/data/.gitkeep
-touch backend/tests/.gitkeep
+from fastapi import FastAPI
 
-echo "Done. Directories and files created."
+app = FastAPI(title="Broadcast Content Intelligence Auditor API (stub)")
+
+
+@app.get("/health")
+def health_check():
+    return {"status": "healthy", "service": "Broadcast Content Intelligence Auditor API (stub)"}
+PY_EOF
+  echo "[file]  created  backend/src/api/server.py (stub)"
+else
+  echo "[file]  exists   backend/src/api/server.py (real implementation)"
+fi
+
+# backend/src/graph files – create empty stubs only if missing
+for f in "__init__.py" "state.py" "nodes.py" "workflow.py"; do
+  path="backend/src/graph/$f"
+  if [ ! -f "$path" ]; then
+    cat > "$path" << 'PY_EOF'
+"""
+Stub module created by startup.sh for the LangGraph workflow.
+Replace with the real implementation from the repository.
+"""
+PY_EOF
+    echo "[file]  created  $path (stub)"
+  else
+    echo "[file]  exists   $path"
+  fi
+done
+
+# backend/src/services stubs only if missing
+for f in "__init__.py" "video_indexer.py" "report_storage.py"; do
+  path="backend/src/services/$f"
+  if [ ! -f "$path" ]; then
+    cat > "$path" << 'PY_EOF'
+"""
+Service stub created by startup.sh.
+Provide concrete implementation for video indexing / report storage here.
+"""
+PY_EOF
+    echo "[file]  created  $path (stub)"
+  else
+    echo "[file]  exists   $path"
+  fi
+done
+
+echo ""
+echo "-- Azure Functions placeholder (only if missing) --"
+
+if [ ! -f "azure_functions/function_app.py" ]; then
+  cat > "azure_functions/function_app.py" << 'PY_EOF'
+"""
+Azure Functions entry point stub.
+
+Replace this with your actual HTTP trigger or other bindings when deploying
+the Broadcast Content Intelligence Auditor as an Azure Function.
+"""
+PY_EOF
+  echo "[file]  created  azure_functions/function_app.py (stub)"
+else
+  echo "[file]  exists   azure_functions/function_app.py"
+fi
+
+echo ""
+echo "-- Backend housekeeping --"
+
+# Keep empty dirs tracked if desired
+touch "backend/data/.gitkeep"
+touch "backend/tests/.gitkeep"
+echo "[file]  touch    backend/data/.gitkeep"
+echo "[file]  touch    backend/tests/.gitkeep"
+
+echo ""
+echo "Startup layout complete."
+echo "Existing source files were left untouched; only missing dirs/files were created."
+
